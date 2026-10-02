@@ -406,6 +406,9 @@ static qboolean VID_SetWindowedMode (int modenum)
 		ChangeDisplaySettings(NULL, 0);
 	vid_borderless_active = false;
 	vid_lastwindowedmode = modenum;
+	/* Creation/centering sends WM_MOVE synchronously. Handle those as
+	 * windowed moves so input does not retain fullscreen's (0, 0) origin. */
+	modestate = MS_WINDOWED;
 
 	WindowRect.top = WindowRect.left = 0;
 
@@ -433,7 +436,6 @@ static qboolean VID_SetWindowedMode (int modenum)
 	CenterWindow(mainwindow, WindowRect.right - WindowRect.left,
 				 WindowRect.bottom - WindowRect.top);
 
-	modestate = MS_WINDOWED;
 	Cvar_SetQuick (&vid_config_fscr, "0");
 
 	return true;

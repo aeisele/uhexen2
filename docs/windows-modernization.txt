@@ -103,6 +103,10 @@ Implemented changes
   Options-menu redraws) do not recenter an already-captured mouse. Pending
   capture is retried after window messages have finished, so returning to
   windowed gameplay restores input after a focus transition.
+  While focused, input also checks the actual Windows capture owner and
+  clipping rectangle, restoring either if lost without recentering again.
+  Switching from fullscreen to windowed mode records the new client origin
+  during window creation so confinement follows the centered game window.
 * On supported Windows versions, a high-resolution waitable timer waits for
   the existing frame deadline and wakes for window/input messages. Older
   systems retain a message-aware sleep fallback. sys_framepacing 0 restores
@@ -135,9 +139,9 @@ Input regression tests require the portable compiler but no game data:
 These exercise the actual input implementation with controlled raw packets,
 including fractional motion, focus/minimization, invalid packets, absolute
 devices, duplicate button prevention, registration, and cleanup. Capture tests
-simulate cursor APIs to verify foreground guards, repeated activation, and
-release/recapture without moving the real desktop cursor. Windows CI also
-runs this test.
+simulate cursor APIs to verify foreground guards, repeated activation,
+lost capture/clipping recovery, and release/recapture without moving the
+real desktop cursor. Windows CI also runs this test.
 
 Use a separate validation directory for the interactive checks below: copy
 glh2.exe, codec DLLs, and the full data1 directory into build\validation.
@@ -154,6 +158,9 @@ The controls test sends Alt+Enter and activation messages to its own game
 window and creates a temporary foreground window. It checks cursor release
 over multiple background frames in both Options and gameplay, in borderless
 and windowed modes, then verifies recapture when the game regains focus.
+Focused checks compare the full screen-coordinate clip rectangle with the
+client area and attempt to move the cursor past all four window edges.
+They also deliberately clear confinement while focused to verify recovery.
 It also checks desktop dimensions, window style, restoration of window
 dimensions, and keyboard input afterward. Use -LegacyMouse for the legacy
 cursor path. This interactive test briefly changes focus and cursor position.

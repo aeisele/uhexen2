@@ -7,22 +7,32 @@
 /* Capture/position calls are simulated so these tests never seize the real
  * desktop cursor. Raw device registration below still uses the Windows API. */
 static HWND test_foreground, test_capture;
-static int cursor_warps, cursor_clips, cursor_hides;
+static int cursor_warps, cursor_clips, cursor_hides, cursor_captures;
 static qboolean cursor_confined;
+static RECT test_clip;
 static HWND Test_Foreground(void) { return test_foreground; }
 static BOOL Test_SetCursorPos(int x, int y) { cursor_warps++; return TRUE; }
 static BOOL Test_ClipCursor(const RECT *rect)
 {
 	if (rect) cursor_clips++;
+	if (rect) test_clip = *rect;
 	cursor_confined = rect != NULL;
 	return TRUE;
 }
-static HWND Test_SetCapture(HWND window) { test_capture = window; return NULL; }
+static BOOL Test_GetClipCursor(RECT *rect)
+{
+	*rect = test_clip;
+	return cursor_confined;
+}
+static HWND Test_GetCapture(void) { return test_capture; }
+static HWND Test_SetCapture(HWND window) { cursor_captures++; test_capture = window; return NULL; }
 static BOOL Test_ReleaseCapture(void) { test_capture = NULL; return TRUE; }
 static int Test_ShowCursor(BOOL show) { if (!show) cursor_hides++; return 0; }
 #define GetForegroundWindow Test_Foreground
 #define SetCursorPos Test_SetCursorPos
 #define ClipCursor Test_ClipCursor
+#define GetClipCursor Test_GetClipCursor
+#define GetCapture Test_GetCapture
 #define SetCapture Test_SetCapture
 #define ReleaseCapture Test_ReleaseCapture
 #define ShowCursor Test_ShowCursor
@@ -67,7 +77,8 @@ static void TestCapture(qboolean raw)
 	mouseinitialized = true;
 	mouseactive = false;
 	_enable_mouse.integer = 1;
-	cursor_warps = cursor_clips = cursor_hides = 0;
+	cursor_warps = cursor_clips = cursor_hides = cursor_captures = 0;
+	SetRect(&window_rect, 100, 200, 1060, 800);
 	mouseshowtoggle = 1;
 
 	/* Reject a request if any focus condition is false. */
@@ -91,21 +102,38 @@ static void TestCapture(qboolean raw)
 	IN_ActivateMouse();
 	IN_ActivateMouse();
 	assert(cursor_warps == 1 && cursor_clips == 1 && cursor_hides == 1);
+	assert(cursor_captures == 1);
+
+	/* Windows can discard capture/clipping while our own flag is still
+	 * set. Repair both without repeating activation side effects. */
+	cursor_confined = false;
+	test_capture = NULL;
+	IN_SetQuakeMouseState();
+	assert(mouseactive && cursor_confined && test_capture == mainwindow);
+	assert(cursor_clips == 2 && cursor_captures == 2);
+	assert(cursor_warps == 1 && cursor_hides == 1);
+	/* A rectangle of the correct size but in the wrong place is invalid. */
+	OffsetRect(&test_clip, 500, -100);
+	IN_SetQuakeMouseState();
+	assert(EqualRect(&test_clip, &window_rect) && cursor_clips == 3);
+	IN_SetQuakeMouseState();
+	assert(cursor_clips == 3 && cursor_captures == 2 && cursor_warps == 1);
 
 	test_foreground = NULL;
 	IN_Accumulate();
 	IN_UpdateClipCursor();
 	IN_HideMouse();
-	assert(cursor_warps == 1 && cursor_clips == 1 && cursor_hides == 1);
+	assert(cursor_warps == 1 && cursor_clips == 3 && cursor_hides == 1);
 	IN_ActivateMouse();
 	assert(!mouseactive && !test_capture && !cursor_confined);
-	IN_ActivateMouse();
-	assert(cursor_warps == 1 && cursor_clips == 1 && cursor_hides == 1);
+	IN_SetQuakeMouseState();
+	assert(cursor_warps == 1 && cursor_clips == 3 && cursor_hides == 1);
 
 	test_foreground = mainwindow;
 	IN_SetQuakeMouseState();
-	assert(mouseactive && cursor_warps == 2 && cursor_clips == 2);
+	assert(mouseactive && cursor_warps == 2 && cursor_clips == 4);
 	IN_DeactivateMouse();
+	IN_SetQuakeMouseState(); /* explicit release must stay released */
 	assert(!mouseactive && !test_capture && !cursor_confined);
 }
 
@@ -199,6 +227,6 @@ int main(void)
 	assert(GetRegisteredRawInputDevices(NULL, &count, sizeof(registered)) == 0);
 	assert(count == 0);
 	DestroyWindow(mainwindow);
-	puts("PASS: raw motion/buttons, capture focus guards, repeated activation, release/recapture, legacy cursor guards, cleanup");
+	puts("PASS: raw motion/buttons, focus guards, repeated activation, lost capture/clipping recovery, release/recapture, legacy cursor guards, cleanup");
 	return 0;
 }

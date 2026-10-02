@@ -308,11 +308,19 @@ IN_UpdateClipCursor
 */
 void IN_UpdateClipCursor (void)
 {
+	RECT clip;
+
 	if (dinput_init)
 		return;
 	if (mouseinitialized && mouseactive && IN_MouseHasFocus())
 	{
-		ClipCursor (&window_rect);
+		/* Capture and clipping are Windows state, not just mouseactive.
+		 * Either may be lost during a window/activation transition. Repair
+		 * them while focused, without warping or changing mouse settings. */
+		if (GetCapture() != mainwindow)
+			SetCapture(mainwindow);
+		if (!GetClipCursor(&clip) || !EqualRect(&clip, &window_rect))
+			ClipCursor(&window_rect);
 	}
 }
 
@@ -365,13 +373,21 @@ void IN_ActivateMouse (void)
 	if (!IN_MouseHasFocus())
 	{
 		if (mouseactive)
+		{
 			IN_DeactivateMouse();
+			/* Preserve the request across a transient NULL foreground
+			 * window. An explicit deactivation still cancels it. */
+			mouseactivatetoggle = true;
+		}
 		return;
 	}
 	/* Options requests capture every draw. Do not warp the cursor again
 	 * (or reapply Windows mouse settings) when already active. */
 	if (mouseactive)
+	{
+		IN_UpdateClipCursor();
 		return;
+	}
 
 	if (mouseinitialized && _enable_mouse.integer)
 	{
