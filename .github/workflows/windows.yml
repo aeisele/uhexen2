@@ -1,0 +1,17 @@
+name: Windows
+
+on: [push, pull_request]
+
+jobs:
+  build-windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build native 64-bit OpenGL client
+        shell: pwsh
+        run: ./scripts/build-windows.ps1 -Bootstrap
+      - uses: actions/upload-artifact@v4
+        with:
+          name: hexen2-windows-x64
+          path: build/win64/
+          if-no-files-found: error

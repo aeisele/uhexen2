@@ -1,0 +1,6 @@
+/.tools/
+/build/
+*.o
+*.res
+/engine/hexen2/glh2.exe
+/engine/hexen2/h2.exe

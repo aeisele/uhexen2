@@ -899,7 +899,21 @@ static void CheckStencilBuffer (void)
 #ifdef GL_DLSYM
 static qboolean GL_OpenLibrary (const char *name)
 {
-	int drv_standalone = q_strcasecmp(name, "opengl32.dll");
+	char system_library[MAX_PATH];
+	UINT len;
+	int drv_standalone = name && q_strcasecmp(name, "opengl32.dll");
+
+	/* A retail installation can contain an obsolete MiniGL or wrapper DLL.
+	 * Use the system driver by default; -gllibrary still opts into a custom
+	 * driver. Keep the GDI pixel-format functions for the system library. */
+	if (!name)
+	{
+		len = GetSystemDirectoryA(system_library, sizeof(system_library));
+		if (!len || len >= sizeof(system_library) - sizeof("\\opengl32.dll"))
+			return false;
+		q_strlcat(system_library, "\\opengl32.dll", sizeof(system_library));
+		name = system_library;
+	}
 
 	Con_SafePrintf("Loading OpenGL library %s\n", name);
 
@@ -1952,6 +1966,12 @@ static void VID_InitFullDIB (HINSTANCE hInstance)
 	int	i, modenum, existingmode;
 	int	j, bpp, done;
 	BOOL	status;
+	qboolean probe_modes = !WinNT || COM_CheckParm("-legacy-display-probe");
+	double start = Sys_DoubleTime();
+
+	if (COM_CheckParm("-profile-startup"))
+		Sys_Printf("Startup: beginning display mode enumeration%s\n",
+			probe_modes ? " (legacy probing enabled)" : "");
 
 	num_fmodes = 0;
 
@@ -1960,7 +1980,11 @@ static void VID_InitFullDIB (HINSTANCE hInstance)
 	// enumerate >8 bpp modes
 	do
 	{
+		memset (&devmode, 0, sizeof(devmode));
+		devmode.dmSize = sizeof(devmode);
 		status = EnumDisplaySettings (NULL, modenum, &devmode);
+		if (!status)
+			break;
 
 		if ((devmode.dmBitsPerPel >= 15) &&
 			(devmode.dmPelsWidth <= MAXWIDTH) &&
@@ -1969,7 +1993,10 @@ static void VID_InitFullDIB (HINSTANCE hInstance)
 		{
 			devmode.dmFields = DM_BITSPERPEL | DM_PELSWIDTH | DM_PELSHEIGHT;
 
-			if (ChangeDisplaySettings (&devmode, CDS_TEST | CDS_FULLSCREEN) ==
+			/* Enumerated modes are already supplied by the display driver.
+			 * Retesting every refresh-rate variant can take tens of seconds
+			 * on modern drivers. The selected mode is checked when applied. */
+			if (!probe_modes || ChangeDisplaySettings (&devmode, CDS_TEST | CDS_FULLSCREEN) ==
 								DISP_CHANGE_SUCCESSFUL)
 			{
 				fmodelist[num_fmodes].type = MS_FULLDIB;
@@ -1984,9 +2011,9 @@ static void VID_InitFullDIB (HINSTANCE hInstance)
 						(int)devmode.dmPelsWidth, (int)devmode.dmPelsHeight,
 						(int)devmode.dmBitsPerPel);
 
-			// if the width is more than twice the height, reduce it by half because this
-			// is probably a dual-screen monitor
-				if (!COM_CheckParm("-noadjustaspect"))
+			// Legacy Win9x drivers could report two monitors as one mode.
+			// NT-family systems can have genuine ultrawide displays.
+				if (!WinNT && !COM_CheckParm("-noadjustaspect"))
 				{
 					if (fmodelist[num_fmodes].width > (fmodelist[num_fmodes].height << 1))
 					{
@@ -2020,14 +2047,16 @@ static void VID_InitFullDIB (HINSTANCE hInstance)
 		modenum++;
 	} while (status);
 
-	// see if there are any low-res modes that aren't being reported
+	// Only legacy drivers need probing for unreported low-resolution modes.
 	bpp = 16;
-	done = 0;
+	done = !probe_modes;
 
-	do
+	while (!done)
 	{
 		for (j = 0; (j < NUM_LOWRESMODES) && (num_fmodes < MAX_MODE_LIST); j++)
 		{
+			memset (&devmode, 0, sizeof(devmode));
+			devmode.dmSize = sizeof(devmode);
 			devmode.dmBitsPerPel = bpp;
 			devmode.dmPelsWidth = std_modes[j].width;
 			devmode.dmPelsHeight = std_modes[j].height;
@@ -2081,10 +2110,13 @@ static void VID_InitFullDIB (HINSTANCE hInstance)
 				done = 1;
 				break;
 		}
-	} while (!done);
+	}
 
 	if (num_fmodes == 0)
 		Con_SafePrintf ("No fullscreen DIB modes found\n");
+	if (COM_CheckParm("-profile-startup"))
+		Sys_Printf("Startup: display mode enumeration took %.3f seconds (%d modes)\n",
+			Sys_DoubleTime() - start, num_fmodes);
 }
 
 /*
@@ -2345,9 +2377,9 @@ void	VID_Init (const unsigned char *palette)
 	if (i && i < com_argc - 1)
 		gl_library = com_argv[i+1];
 	else
-		gl_library = "opengl32.dll";
+		gl_library = NULL;
 	if (!GL_OpenLibrary(gl_library))
-		Sys_Error ("Unable to load GL library %s", gl_library);
+		Sys_Error ("Unable to load GL library %s", gl_library ? gl_library : "system opengl32.dll");
 #else
 	hInstGL = GetModuleHandle("opengl32.dll");
 #endif

@@ -42,6 +42,8 @@ qboolean		isDedicated;
 
 #define	TIME_WRAP_VALUE	(~(DWORD)0)
 static DWORD		starttime;
+static LARGE_INTEGER	counter_start;
+static double		counter_seconds;
 static qboolean		sc_return_on_enter = false;
 static HANDLE		hinput, houtput;
 
@@ -308,6 +310,12 @@ static void Sys_Init (void)
 
 	timeBeginPeriod (1);	/* 1 ms timer precision */
 	starttime = timeGetTime ();
+	{
+		LARGE_INTEGER frequency;
+		if (QueryPerformanceFrequency(&frequency) && frequency.QuadPart > 0 &&
+		    QueryPerformanceCounter(&counter_start))
+			counter_seconds = 1.0 / (double)frequency.QuadPart;
+	}
 
 /* do we really need these with opengl ?? */
 	MaskExceptions ();
@@ -398,6 +406,10 @@ Sys_DoubleTime
 double Sys_DoubleTime (void)
 {
 	DWORD	now, passed;
+	LARGE_INTEGER counter;
+
+	if (counter_seconds && QueryPerformanceCounter(&counter))
+		return (double)(counter.QuadPart - counter_start.QuadPart) * counter_seconds;
 
 	now = timeGetTime();
 	if (now < starttime)	/* wrapped? */

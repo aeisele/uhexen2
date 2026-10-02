@@ -995,15 +995,39 @@ void Host_Frame (float time)
 Host_Init
 ====================
 */
+/* Log before entering each subsystem, so even a stalled startup identifies
+ * the operation in progress. Sys_Printf also writes to the debug log. */
+static void Host_InitStage (const char *stage)
+{
+	static const char *previous;
+	static double start, last;
+	double now;
+
+	if (!COM_CheckParm("-profile-startup"))
+		return;
+	now = Sys_DoubleTime();
+	if (previous)
+		Sys_Printf("Startup: %s took %.3f seconds (total %.3f)\n",
+			previous, now - last, now - start);
+	else
+		start = now;
+	previous = stage;
+	last = now;
+	if (stage)
+		Sys_Printf("Startup: beginning %s\n", stage);
+}
+
 void Host_Init (void)
 {
 	Sys_Printf ("Host_Init\n");
+	Host_InitStage ("core");
 
 	Memory_Init (host_parms->membase, host_parms->memsize);
 	Cbuf_Init ();
 	Cmd_Init ();
 	COM_Init ();
 	SV_Init ();
+	Host_InitStage ("filesystem");
 	FS_Init ();
 	CL_Cmd_Init ();
 	Host_RemoveGIPFiles(NULL);
@@ -1011,7 +1035,9 @@ void Host_Init (void)
 	Host_InitLocal ();
 	PR_Init ();
 	Mod_Init ();
+	Host_InitStage ("network");
 	NET_Init ();
+	Host_InitStage ("resources");
 
 	Con_Printf ("Exe: " __TIME__ " " __DATE__ "\n");
 	Con_Printf ("%4.1f megabyte heap\n", host_parms->memsize/(1024*1024.0));
@@ -1035,20 +1061,29 @@ void Host_Init (void)
 		if (!host_colormap)
 			Sys_Error ("Couldn't load gfx/colormap.lmp");
 
+		Host_InitStage ("video");
 		VID_Init (host_basepal);
+		Host_InitStage ("renderer");
 		Draw_Init ();
 		SCR_Init ();
 		R_Init ();
 		Sbar_Init();
 
+		Host_InitStage ("sound");
 		S_Init ();
+		Host_InitStage ("CD audio");
 		CDAudio_Init();
+		Host_InitStage ("MIDI");
 		MIDI_Init();
+		Host_InitStage ("streaming music");
 		BGM_Init();
 
+		Host_InitStage ("client");
 		CL_Init();
+		Host_InitStage ("input");
 		IN_Init();
 	}
+	Host_InitStage ("startup scripts");
 
 	CFG_CloseConfig();
 
@@ -1083,6 +1118,7 @@ void Host_Init (void)
 		if (!sv.active)
 			Cbuf_AddText ("map demo1\n");
 	}
+	Host_InitStage (NULL);
 }
 
 /*

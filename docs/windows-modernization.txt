@@ -1,0 +1,122 @@
+Windows modernization: first milestone
+======================================
+
+Scope
+-----
+This is a native 64-bit OpenGL build of Hammer of Thyrion. Hexen II descends
+from Quake, but its game VM, network protocol, models, hub/save state, and
+gameplay require Hexen II support. Modern Quake ports are useful references
+for individual systems; replacing the engine wholesale is not a drop-in fix.
+
+The first milestone fixes a measured Windows startup bottleneck and makes
+the Windows build reproducible. It does not replace the renderer or input
+backend, and high-refresh gameplay still needs separate investigation.
+
+Build from PowerShell in the repository root
+-------------------------------------------
+    .\scripts\build-windows.ps1 -Bootstrap
+
+This downloads pinned w64devkit 2.10.0 (64 MB), checks its SHA-256, and extracts
+it under .tools. It does not install global tools or change the saved PATH.
+No Visual Studio, Python, CMake installation, or SDL download is required.
+The checked-in codec DLLs/import libraries are used for this first milestone.
+
+Subsequent builds:
+    .\scripts\build-windows.ps1
+
+Debug build:
+    .\scripts\build-windows.ps1 -DebugBuild
+
+An existing compatible w64devkit can be selected with -ToolchainPath.
+The script rebuilds every object because the legacy Makefile does not track
+compiler option/header changes and shares objects with the software renderer.
+Output: build\win64\glh2.exe, codec DLLs, and Play-Hexen-II.cmd.
+Windows CI uses the same script and publishes binaries without game data.
+
+Toolchain source: https://github.com/skeeto/w64devkit/releases/tag/v2.10.0
+
+Run an isolated copy
+--------------------
+Copy the entire data1 directory from your installed game to build\win64\data1.
+Copy portals as well if you own the mission pack. Include loose patched game
+files, not only the PAKs. Do not replace an existing test data1 directory if
+you want to preserve saves/configuration created there.
+
+Double-click build\win64\Play-Hexen-II.cmd. The launcher sets the working
+directory correctly. It writes debug_h2.log alongside the executable.
+For the mission pack, run Play-Hexen-II.cmd -portals from that directory.
+
+The Steam installation and its launch configuration are not modified.
+This separate copy has its own saves and settings. Do not copy the old
+installation's opengl32.dll or 32-bit music DLLs into the 64-bit output.
+
+Implemented changes
+-------------------
+* Windows NT-family systems use the display modes reported by Windows.
+  Previously, startup called ChangeDisplaySettings(CDS_TEST) repeatedly,
+  including refresh-rate duplicates, and probed unreported low-res modes.
+  This work ran even for a windowed launch. The selected fullscreen mode
+  is still checked when actually applied.
+* DEVMODE is initialized correctly, including dmSize. Enumeration stops
+  immediately when EnumDisplaySettings fails.
+* Wide modes are no longer automatically halved on Windows NT. The old
+  heuristic assumed that an aspect ratio above 2:1 meant two monitors.
+* The system OpenGL library is loaded by absolute path by default. Old
+  installation-local MiniGL/wrapper DLLs no longer shadow the default.
+  Explicit -gllibrary (or -g) overrides remain available for custom drivers.
+* QueryPerformanceCounter supplies frame/startup timing on supported systems,
+  retaining the existing multimedia timer as a fallback. This improves clock
+  precision; it does not decouple physics from rendering or raise the FPS cap.
+* -profile-startup enables logging and records subsystem entry/completion,
+  elapsed time, and display enumeration details. A stalled run leaves its
+  last entered stage in debug_h2.log.
+
+Validation commands
+-------------------
+    .\scripts\test-windows-startup.ps1
+    .\scripts\test-windows-startup.ps1 -LegacyDisplayProbe
+    .\scripts\test-windows-startup.ps1 -Fullscreen -LoadMap
+
+Tests use copied data beside the executable, request two frames, and quit.
+They require an interactive Windows desktop and proprietary game data, so
+they are not run on hosted CI. Each test overwrites debug_h2.log and can
+update the copied game's config.cfg. Save logs before the next run.
+The test only terminates its own process if its bounded timeout expires.
+
+-legacy-display-probe opts back into the expensive display tests for driver
+troubleshooting. This switch is not recommended for normal play.
+
+Initial measurements, 2026-10-02, Windows 11 / GeForce RTX 4090
+-----------------------------------------------------------
+Copied installed data, 960x600 window, no installation-local GL wrapper:
+* Instrumented pre-fix engine: video 13.820 s; Host_Init 14.271 s.
+* Updated build: display enumeration 0.031 s; Host_Init 0.759 s.
+* Same updated binary with legacy probing: enumeration 11.522 s;
+  Host_Init 12.685 s. Both enumeration paths found 22 modes.
+* Fullscreen at desktop resolution (2560x1440) and windowed launches both
+  loaded demo1 (Blackmarsh), connected the player, initialized DirectSound
+  and MIDI, and exited with status 0. Map loading adds several seconds;
+  these startup measurements are not map-load or gameplay benchmarks.
+
+The GCC 16.2 build succeeds with one existing unused-variable warning in
+VID_DescribeModes_f. The Windows CI workflow is added but has not been run
+on GitHub. Legacy Windows, software rendering, and HexenWorld are untested.
+
+These are local single-run measurements, not a statistical benchmark or a
+measurement of Steam/overlay startup. The installed 2018 executable and its
+2006 OpenGL wrapper were not modified. The reported 30+10 second Steam launch
+has not been reproduced end-to-end by these isolated tests.
+
+Next modernization milestones
+-----------------------------
+1. Modern window/input/audio backend, borderless fullscreen, raw mouse input,
+   controller hotplug, and per-user settings. The repository has an SDL2 patch
+   that can inform migration; choose SDL2/SDL3 after auditing Hexen II paths.
+2. Frame pacing and independent render/simulation rates, with demo, network,
+   moving-platform, and gameplay regression checks before raising FPS limits.
+3. Renderer improvements: explicit widescreen FOV/UI behavior, interpolation,
+   GPU batching, and modern GL. Preserve Hexen II effects and asset formats.
+
+References for that work:
+https://github.com/sezero/quakespasm
+https://github.com/andrei-drexler/ironwail

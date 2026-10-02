@@ -109,7 +109,8 @@ void LOG_Init (quakeparms_t *parms)
 	int			i, j;
 	char		session[24];
 
-	if (COM_CheckParm("-condebug") || COM_CheckParm("-debuglog"))
+	if (COM_CheckParm("-condebug") || COM_CheckParm("-debuglog") ||
+	    COM_CheckParm("-profile-startup"))
 	{
 		con_debuglog |= LOG_NORMAL;
 	}
