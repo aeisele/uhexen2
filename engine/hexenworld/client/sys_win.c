@@ -430,6 +430,10 @@ void Sys_SendKeyEvents (void)
 		TranslateMessage (&msg);
 		DispatchMessage (&msg);
 	}
+#ifndef SDLQUAKE
+	/* WM_ACTIVATE may arrive before the foreground window has settled. */
+	IN_SetQuakeMouseState();
+#endif
 }
 
 #define MAX_CLIPBOARDTXT	MAXCMDLINE	/* 256 */

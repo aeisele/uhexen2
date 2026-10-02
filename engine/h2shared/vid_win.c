@@ -1824,7 +1824,8 @@ static void AppActivate (BOOL fActive, BOOL minimize)
 			{
 			// with winmouse, we may fail having our
 			// window back from the iconified state. yuck...
-				if (dinput_init)
+				if (dinput_init || (!cl.paused &&
+				    (Key_GetDest() == key_game || Key_GetDest() == key_console)))
 				{
 					IN_ActivateMouse ();
 					IN_HideMouse ();

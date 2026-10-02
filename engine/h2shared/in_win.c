@@ -193,6 +193,12 @@ static void IN_StartupJoystick (void);
 static void Joy_AdvancedUpdate_f (void);
 static void IN_JoyMove (usercmd_t *cmd);
 
+static qboolean IN_MouseHasFocus (void)
+{
+	return ActiveApp && !Minimized && mainwindow &&
+		GetForegroundWindow() == mainwindow;
+}
+
 /* Keep legacy button/wheel messages so they are delivered exactly once.
  * Only motion comes from WM_INPUT; never request background input. */
 static qboolean IN_InitRawInput (void)
@@ -304,7 +310,7 @@ void IN_UpdateClipCursor (void)
 {
 	if (dinput_init)
 		return;
-	if (mouseinitialized && mouseactive)
+	if (mouseinitialized && mouseactive && IN_MouseHasFocus())
 	{
 		ClipCursor (&window_rect);
 	}
@@ -334,7 +340,8 @@ IN_HideMouse
 */
 void IN_HideMouse (void)
 {
-
+	if (!IN_MouseHasFocus())
+		return;
 	if (mouseshowtoggle)
 	{
 		ShowCursor (FALSE);
@@ -352,6 +359,19 @@ void IN_ActivateMouse (void)
 {
 
 	mouseactivatetoggle = true;
+
+	/* Menus and server connection callbacks may request capture while the
+	 * game is in the background. Only the foreground game may own it. */
+	if (!IN_MouseHasFocus())
+	{
+		if (mouseactive)
+			IN_DeactivateMouse();
+		return;
+	}
+	/* Options requests capture every draw. Do not warp the cursor again
+	 * (or reapply Windows mouse settings) when already active. */
+	if (mouseactive)
+		return;
 
 	if (mouseinitialized && _enable_mouse.integer)
 	{
@@ -425,7 +445,10 @@ void IN_DeactivateMouse (void)
 		else
 		{
 			if (restore_spi)
+			{
 				SystemParametersInfo (SPI_SETMOUSE, 0, originalmouseparms, 0);
+				restore_spi = false;
+			}
 
 			ClipCursor (NULL);
 			ReleaseCapture ();
@@ -753,7 +776,7 @@ static void IN_MouseMove (usercmd_t *cmd)
 	int		mx, my;
 	int		i;
 
-	if (!mouseactive)
+	if (!mouseactive || !IN_MouseHasFocus())
 		return;
 
 	if (rawinput_active)
@@ -972,7 +995,7 @@ void IN_Accumulate (void)
 {
 	if (dinput_init || rawinput_active)
 		return;
-	if (mouseactive)
+	if (mouseactive && IN_MouseHasFocus())
 	{
 		GetCursorPos (&current_pos);
 

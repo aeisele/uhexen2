@@ -98,6 +98,11 @@ Implemented changes
   -norawinput selects the legacy Windows mouse path; -dinput selects DirectInput.
   in_rawinput 0 is an archived preference that takes effect on the next launch.
   A +in_rawinput command-line override is read before input initialization.
+  Capture, cursor hiding, clipping, and legacy cursor movement require the
+  game to be the foreground window. Repeated activation requests (including
+  Options-menu redraws) do not recenter an already-captured mouse. Pending
+  capture is retried after window messages have finished, so returning to
+  windowed gameplay restores input after a focus transition.
 * On supported Windows versions, a high-resolution waitable timer waits for
   the existing frame deadline and wakes for window/input messages. Older
   systems retain a message-aware sleep fallback. sys_framepacing 0 restores
@@ -129,22 +134,29 @@ Input regression tests require the portable compiler but no game data:
 
 These exercise the actual input implementation with controlled raw packets,
 including fractional motion, focus/minimization, invalid packets, absolute
-devices, duplicate button prevention, registration, and cleanup. Windows CI
-also runs this test.
+devices, duplicate button prevention, registration, and cleanup. Capture tests
+simulate cursor APIs to verify foreground guards, repeated activation, and
+release/recapture without moving the real desktop cursor. Windows CI also
+runs this test.
 
 Use a separate validation directory for the interactive checks below: copy
 glh2.exe, codec DLLs, and the full data1 directory into build\validation.
-These tests change that copy's configuration (including F11/F12 bindings in
+These tests change that copy's configuration (including F10/F11/F12 bindings in
 the controls test). Do not point them at a playing copy with valued settings.
 An alternate directory can be selected by passing -Executable.
 
     .\scripts\test-windows-controls.ps1
+    .\scripts\test-windows-controls.ps1 -LegacyMouse
     .\scripts\test-windows-ui-scale.ps1
     .\scripts\test-windows-framepacing.ps1
 
-The controls test sends Alt+Enter and activation messages only to its own
-game window. It checks desktop dimensions, window style, cursor release and
-recapture, restoration of window dimensions, and keyboard input afterward.
+The controls test sends Alt+Enter and activation messages to its own game
+window and creates a temporary foreground window. It checks cursor release
+over multiple background frames in both Options and gameplay, in borderless
+and windowed modes, then verifies recapture when the game regains focus.
+It also checks desktop dimensions, window style, restoration of window
+dimensions, and keyboard input afterward. Use -LegacyMouse for the legacy
+cursor path. This interactive test briefly changes focus and cursor position.
 It does not replace a manual Alt+Tab/gameplay test with a physical mouse.
 
 The UI scaling test checks fullscreen/windowed round trips and restarting
@@ -216,3 +228,9 @@ Next modernization milestones
 References for that work:
 https://github.com/sezero/quakespasm
 https://github.com/andrei-drexler/ironwail
+
+Mouse focus reference checked for this fix:
+https://github.com/sezero/quakespasm/blob/master/Quake/in_sdl.c
+QuakeSpasm uses SDL relative mouse mode, tracks window focus, and discards
+unfocused mouse motion. This port retains its native Windows input backend
+and enforces foreground ownership at the capture and cursor-operation boundary.

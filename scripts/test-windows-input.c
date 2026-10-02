@@ -1,11 +1,38 @@
 /* Exercise the real Windows input code with controlled WM_INPUT payloads.
  * Build with test-windows-input.ps1; no game data or visible window required. */
 #include <assert.h>
+#include "quakedef.h"
+#include "winquake.h"
+
+/* Capture/position calls are simulated so these tests never seize the real
+ * desktop cursor. Raw device registration below still uses the Windows API. */
+static HWND test_foreground, test_capture;
+static int cursor_warps, cursor_clips, cursor_hides;
+static qboolean cursor_confined;
+static HWND Test_Foreground(void) { return test_foreground; }
+static BOOL Test_SetCursorPos(int x, int y) { cursor_warps++; return TRUE; }
+static BOOL Test_ClipCursor(const RECT *rect)
+{
+	if (rect) cursor_clips++;
+	cursor_confined = rect != NULL;
+	return TRUE;
+}
+static HWND Test_SetCapture(HWND window) { test_capture = window; return NULL; }
+static BOOL Test_ReleaseCapture(void) { test_capture = NULL; return TRUE; }
+static int Test_ShowCursor(BOOL show) { if (!show) cursor_hides++; return 0; }
+#define GetForegroundWindow Test_Foreground
+#define SetCursorPos Test_SetCursorPos
+#define ClipCursor Test_ClipCursor
+#define SetCapture Test_SetCapture
+#define ReleaseCapture Test_ReleaseCapture
+#define ShowCursor Test_ShowCursor
 #include "../engine/h2shared/in_win.c"
 
 qboolean ActiveApp, Minimized;
 HWND mainwindow;
 int window_center_x, window_center_y;
+RECT window_rect;
+cvar_t _enable_mouse;
 client_state_t cl;
 kbutton_t in_strafe, in_mlook;
 cvar_t sensitivity, lookstrafe, m_side, m_yaw, m_pitch, m_forward;
@@ -34,6 +61,54 @@ static void Move(LONG x, LONG y, USHORT flags)
 	IN_RawInput(0);
 }
 
+static void TestCapture(qboolean raw)
+{
+	rawinput_active = raw;
+	mouseinitialized = true;
+	mouseactive = false;
+	_enable_mouse.integer = 1;
+	cursor_warps = cursor_clips = cursor_hides = 0;
+	mouseshowtoggle = 1;
+
+	/* Reject a request if any focus condition is false. */
+	ActiveApp = false;
+	test_foreground = mainwindow;
+	IN_ActivateMouse();
+	ActiveApp = true;
+	Minimized = true;
+	IN_ActivateMouse();
+	Minimized = false;
+	test_foreground = NULL; /* stale ActiveApp during a focus transition */
+	IN_ActivateMouse();
+	IN_HideMouse();
+	assert(!mouseactive && !test_capture && !cursor_confined);
+	assert(cursor_warps == 0 && cursor_clips == 0 && cursor_hides == 0);
+
+	test_foreground = mainwindow;
+	IN_SetQuakeMouseState();
+	assert(mouseactive && test_capture == mainwindow && cursor_confined);
+	assert(cursor_warps == 1 && cursor_clips == 1 && cursor_hides == 1);
+	IN_ActivateMouse();
+	IN_ActivateMouse();
+	assert(cursor_warps == 1 && cursor_clips == 1 && cursor_hides == 1);
+
+	test_foreground = NULL;
+	IN_Accumulate();
+	IN_UpdateClipCursor();
+	IN_HideMouse();
+	assert(cursor_warps == 1 && cursor_clips == 1 && cursor_hides == 1);
+	IN_ActivateMouse();
+	assert(!mouseactive && !test_capture && !cursor_confined);
+	IN_ActivateMouse();
+	assert(cursor_warps == 1 && cursor_clips == 1 && cursor_hides == 1);
+
+	test_foreground = mainwindow;
+	IN_SetQuakeMouseState();
+	assert(mouseactive && cursor_warps == 2 && cursor_clips == 2);
+	IN_DeactivateMouse();
+	assert(!mouseactive && !test_capture && !cursor_confined);
+}
+
 int main(void)
 {
 	RAWINPUTDEVICE registered;
@@ -42,6 +117,7 @@ int main(void)
 	mainwindow = CreateWindowExA(0, "STATIC", "Input test", 0,
 		0, 0, 1, 1, NULL, NULL, GetModuleHandle(NULL), NULL);
 	assert(mainwindow);
+	test_foreground = mainwindow;
 	rawinput_active = IN_InitRawInput();
 	assert(rawinput_active);
 	assert(GetRegisteredRawInputDevices(&registered, &count, sizeof(registered)) == 1);
@@ -114,12 +190,15 @@ int main(void)
 	IN_ClearStates();
 	assert(old_mouse_x == 0 && old_mouse_y == 0 && !raw_absolute_valid);
 
+	TestCapture(true);
+	TestCapture(false);
+	rawinput_active = true; /* registration from IN_InitRawInput is still live */
 	IN_ShutdownRawInput();
 	assert(!rawinput_active);
 	count = 0;
 	assert(GetRegisteredRawInputDevices(NULL, &count, sizeof(registered)) == 0);
 	assert(count == 0);
 	DestroyWindow(mainwindow);
-	puts("PASS: raw registration, motion, fractional sensitivity, focus, menus, invalid packets, absolute devices, buttons, cleanup");
+	puts("PASS: raw motion/buttons, capture focus guards, repeated activation, release/recapture, legacy cursor guards, cleanup");
 	return 0;
 }
