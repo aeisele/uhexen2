@@ -52,6 +52,7 @@ try {
     Get-ChildItem -LiteralPath (Join-Path $repo 'oslibs\windows\codecs\x64') -Filter '*.dll' |
         Copy-Item -Destination $output
     Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'play-windows.cmd') -Destination (Join-Path $output 'Play-Hexen-II.cmd')
+    Copy-Item -LiteralPath (Join-Path $PSScriptRoot 'play-borderless.cmd') -Destination (Join-Path $output 'Play-Hexen-II-Borderless.cmd')
     Write-Host "Built $output\glh2.exe"
 } finally {
     $env:PATH = $savedPath

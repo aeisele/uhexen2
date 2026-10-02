@@ -110,7 +110,7 @@ void LOG_Init (quakeparms_t *parms)
 	char		session[24];
 
 	if (COM_CheckParm("-condebug") || COM_CheckParm("-debuglog") ||
-	    COM_CheckParm("-profile-startup"))
+	    COM_CheckParm("-profile-startup") || COM_CheckParm("-profile-frames"))
 	{
 		con_debuglog |= LOG_NORMAL;
 	}

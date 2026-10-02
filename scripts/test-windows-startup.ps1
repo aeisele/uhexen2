@@ -1,8 +1,11 @@
 [CmdletBinding()]
 param(
-    [string]$Executable = (Join-Path (Split-Path -Parent $PSScriptRoot) 'build\win64\glh2.exe'),
+    [string]$Executable = (Join-Path (Split-Path -Parent $PSScriptRoot) 'build\validation\glh2.exe'),
     [switch]$LegacyDisplayProbe,
     [switch]$Fullscreen,
+    [switch]$Exclusive,
+    [switch]$LegacyMouse,
+    [switch]$ToggleFullscreen,
     [switch]$LoadMap,
     [ValidateRange(5, 55)][int]$TimeoutSeconds = 45
 )
@@ -14,11 +17,20 @@ if (!(Test-Path -LiteralPath (Join-Path $runDir 'data1\pak0.pak'))) {
     throw 'Copy your game data1 directory alongside the test executable first. Use a separate copy to keep test configuration and saves isolated.'
 }
 $gameArgs = @('-profile-startup')
-if ($Fullscreen) { $gameArgs += @('-fullscreen', '-current') }
+if ($Exclusive) { $gameArgs += @('-exclusive', '-current') }
+elseif ($Fullscreen) { $gameArgs += '-borderless' }
 else { $gameArgs += @('-window', '-width', '960', '-height', '600') }
 if ($LegacyDisplayProbe) { $gameArgs += '-legacy-display-probe' }
-if ($LoadMap) { $gameArgs += @('+map', 'demo1') }
-$gameArgs += @('+wait', '+wait', '+quit')
+if ($LegacyMouse) { $gameArgs += '-norawinput' }
+if ($LoadMap) {
+    $gameArgs += @('+map', 'demo1')
+    # Allow the local server/client sign-on exchange to finish.
+    $gameArgs += @('+wait') * 12
+}
+if ($ToggleFullscreen) {
+    $gameArgs += @('+wait', '+wait', '+vid_togglefullscreen', '+wait', '+wait', '+vid_togglefullscreen')
+}
+$gameArgs += @('+wait', '+wait', '+disconnect', '+quit')
 $timer = [Diagnostics.Stopwatch]::StartNew()
 $process = Start-Process -FilePath $exe -WorkingDirectory $runDir -ArgumentList $gameArgs -WindowStyle Hidden -PassThru
 try {
@@ -33,7 +45,13 @@ try {
     if ($LoadMap -and !($log -match 'entered the game')) {
         throw 'The map test did not reach a connected player. Inspect debug_h2.log.'
     }
-    $log | Select-String 'Startup:|GL_VENDOR:|GL_RENDERER:|Loading OpenGL'
+    if ($ToggleFullscreen -and @($log -match 'Re-initializing video:').Count -ne 2) {
+        throw 'The fullscreen round trip did not complete.'
+    }
+    if ($LegacyMouse -and ($log -match 'Raw mouse input initialized')) {
+        throw 'The legacy mouse override was ignored.'
+    }
+    $log | Select-String 'Startup:|GL_VENDOR:|GL_RENDERER:|Loading OpenGL|Display mode:|Raw mouse|Frame pacing:|Re-initializing video:'
     Write-Host ('Process lifetime: {0:F3} seconds' -f $timer.Elapsed.TotalSeconds)
 } finally {
     # Only terminate the process this test started, never another game session.

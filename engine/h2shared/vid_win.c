@@ -2036,6 +2036,11 @@ static LRESULT WINAPI MainWndProc (HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM l
 	// this is complicated because Win32 seems to pack multiple mouse
 	// events into one update sometimes, so we always check all states
 	// and look for events
+#ifdef WM_INPUT
+	case WM_INPUT:
+		IN_RawInput(lParam);
+		return DefWindowProc(hWnd, uMsg, wParam, lParam);
+#endif
 	case WM_LBUTTONDOWN:
 	case WM_LBUTTONUP:
 	case WM_RBUTTONDOWN:

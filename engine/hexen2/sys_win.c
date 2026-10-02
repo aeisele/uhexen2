@@ -34,6 +34,7 @@
 
 cvar_t		sys_nostdout = {"sys_nostdout", "0", CVAR_NONE};
 cvar_t		sys_throttle = {"sys_throttle", "0.02", CVAR_ARCHIVE};
+cvar_t sys_framepacing = {"sys_framepacing", "1", CVAR_ARCHIVE};
 
 qboolean	ActiveApp, Minimized;
 qboolean	Win95, Win95old, WinNT, WinVista;
@@ -48,6 +49,9 @@ static qboolean		sc_return_on_enter = false;
 static HANDLE		hinput, houtput;
 
 static HANDLE	tevent;
+static HANDLE frame_timer;
+static BOOL (WINAPI *pSetWaitableTimer)(HANDLE, const LARGE_INTEGER *, LONG,
+	PTIMERAPCROUTINE, LPVOID, BOOL);
 
 static volatile int	sys_checksum;
 
@@ -275,6 +279,17 @@ Sys_Init
 static void Sys_Init (void)
 {
 	OSVERSIONINFO	vinfo;
+	HANDLE (WINAPI *create_timer)(LPSECURITY_ATTRIBUTES, LPCWSTR, DWORD, DWORD);
+	HMODULE kernel32 = GetModuleHandleA("kernel32.dll");
+
+	create_timer = (HANDLE (WINAPI *)(LPSECURITY_ATTRIBUTES, LPCWSTR, DWORD, DWORD))
+		GetProcAddress(kernel32, "CreateWaitableTimerExW");
+	pSetWaitableTimer = (BOOL (WINAPI *)(HANDLE, const LARGE_INTEGER *, LONG,
+		PTIMERAPCROUTINE, LPVOID, BOOL))GetProcAddress(kernel32, "SetWaitableTimer");
+	if (create_timer && pSetWaitableTimer)
+		/* CREATE_WAITABLE_TIMER_HIGH_RESOLUTION (Windows 10 1803+). */
+		frame_timer = create_timer(NULL, NULL, 0x00000002, TIMER_MODIFY_STATE | SYNCHRONIZE);
+	Sys_Printf("Frame pacing: %s\n", frame_timer ? "high-resolution waitable timer" : "message-aware sleep fallback");
 
 	vinfo.dwOSVersionInfoSize = sizeof(vinfo);
 
@@ -387,6 +402,9 @@ void Sys_PrintTerm (const char *msgtxt)
 void Sys_Quit (void)
 {
 	Host_Shutdown();
+	if (frame_timer)
+		CloseHandle(frame_timer);
+	timeEndPeriod(1);
 
 	if (tevent)
 		CloseHandle (tevent);
@@ -638,6 +656,18 @@ static void SleepUntilInput (unsigned long msecs)
 	MsgWaitForMultipleObjects(1, &tevent, FALSE, msecs, QS_ALLINPUT);
 }
 
+static void Sys_WaitForFrame (double seconds)
+{
+	LARGE_INTEGER due;
+	due.QuadPart = -(LONGLONG)(seconds * 10000000.0);
+	if (due.QuadPart >= 0)
+		due.QuadPart = -1;
+	if (frame_timer && pSetWaitableTimer(frame_timer, &due, 0, NULL, NULL, FALSE))
+		MsgWaitForMultipleObjects(1, &frame_timer, FALSE, INFINITE, QS_ALLINPUT);
+	else
+		SleepUntilInput((unsigned long)(seconds * 1000.0) + 1);
+}
+
 
 static void PrintVersion (void)
 {
@@ -691,6 +721,8 @@ int WINAPI WinMain (HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLin
 {
 	int		i;
 	double		time, oldtime, newtime;
+	double remaining;
+	int frame_before, profile_frames;
 	MEMORYSTATUS	lpBuffer;
 
 	/* previous instances do not exist in Win32 */
@@ -809,6 +841,7 @@ int WINAPI WinMain (HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLin
 	Sys_Init ();
 
 	Host_Init();
+	profile_frames = COM_CheckParm("-profile-frames");
 
 	oldtime = Sys_DoubleTime ();
 
@@ -847,9 +880,23 @@ int WINAPI WinMain (HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLin
 		newtime = Sys_DoubleTime ();
 		time = newtime - oldtime;
 
+		if (sys_framepacing.integer && ActiveApp && !Minimized && !block_drawing)
+		{
+			remaining = Host_FrameTimeRemaining(time);
+			if (remaining > 0)
+			{
+				Sys_WaitForFrame(remaining);
+				Sys_SendKeyEvents();
+				continue;
+			}
+		}
+		frame_before = host_framecount;
 		Host_Frame (time);
+		if (profile_frames && host_framecount != frame_before)
+			Sys_Printf("Frame: %d %.6f %.6f\n", host_framecount, newtime,
+				Sys_DoubleTime() - newtime);
 
-		if (time < sys_throttle.value)
+		if (!sys_framepacing.integer && time < sys_throttle.value)
 			Sleep (1);
 
 		oldtime = newtime;

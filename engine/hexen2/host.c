@@ -365,6 +365,9 @@ static void Host_InitLocal (void)
 
 	Cvar_RegisterVariable (&sys_nostdout);
 	Cvar_RegisterVariable (&sys_throttle);
+#ifdef PLATFORM_WINDOWS
+	Cvar_RegisterVariable (&sys_framepacing);
+#endif
 
 	Cvar_RegisterVariable (&sys_ticrate);
 	Cvar_RegisterVariable (&sys_adaptive);
@@ -658,11 +661,21 @@ void Host_ClearMemory (void)
 
 /*
 ===================
-Host_FilterTime
+Host_FrameTimeRemaining
 
-Returns false if the time is too short to run a frame
+Let the platform wait for the same deadline used by Host_FilterTime.
 ===================
 */
+double Host_FrameTimeRemaining (double elapsed)
+{
+	double remaining;
+	if (cls.timedemo)
+		return 0;
+	remaining = 1.0/72.0 - (realtime - oldrealtime + elapsed);
+	return remaining > 0 ? remaining : 0;
+}
+
+/* Returns false if the time is too short to run a frame. */
 static qboolean Host_FilterTime (float time)
 {
 	realtime += time;

@@ -48,6 +48,9 @@ extern	qboolean	isDedicated;
 
 extern	cvar_t		sys_ticrate;
 extern	cvar_t		sys_throttle;
+#ifdef PLATFORM_WINDOWS
+extern cvar_t sys_framepacing;
+#endif
 extern	cvar_t		sys_nostdout;
 extern	cvar_t		developer;
 
@@ -73,6 +76,7 @@ FUNC_NORETURN void Host_EndGame (const char *message, ...) FUNC_PRINTF(1,2);
 #pragma aux Host_EndGame aborts;
 #endif
 void Host_Frame (float time);
+double Host_FrameTimeRemaining (double elapsed);
 void Host_Quit_f (void);
 void Host_ClientCommands (const char *fmt, ...) FUNC_PRINTF(1,2);
 void Host_ShutdownServer (qboolean crash);

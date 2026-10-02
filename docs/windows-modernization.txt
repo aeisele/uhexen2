@@ -1,5 +1,5 @@
-Windows modernization: first milestone
-======================================
+Windows modernization
+=====================
 
 Scope
 -----
@@ -9,8 +9,9 @@ gameplay require Hexen II support. Modern Quake ports are useful references
 for individual systems; replacing the engine wholesale is not a drop-in fix.
 
 The first milestone fixes a measured Windows startup bottleneck and makes
-the Windows build reproducible. It does not replace the renderer or input
-backend, and high-refresh gameplay still needs separate investigation.
+the Windows build reproducible. The second adds borderless fullscreen,
+raw mouse motion, and more precise frame pacing to the native Windows client.
+The renderer and the 72 FPS gameplay limit are retained.
 
 Build from PowerShell in the repository root
 -------------------------------------------
@@ -19,7 +20,7 @@ Build from PowerShell in the repository root
 This downloads pinned w64devkit 2.10.0 (64 MB), checks its SHA-256, and extracts
 it under .tools. It does not install global tools or change the saved PATH.
 No Visual Studio, Python, CMake installation, or SDL download is required.
-The checked-in codec DLLs/import libraries are used for this first milestone.
+The checked-in codec DLLs/import libraries are used by this build.
 
 Subsequent builds:
     .\scripts\build-windows.ps1
@@ -30,7 +31,8 @@ Debug build:
 An existing compatible w64devkit can be selected with -ToolchainPath.
 The script rebuilds every object because the legacy Makefile does not track
 compiler option/header changes and shares objects with the software renderer.
-Output: build\win64\glh2.exe, codec DLLs, and Play-Hexen-II.cmd.
+Output: build\win64\glh2.exe, codec DLLs, Play-Hexen-II.cmd, and
+Play-Hexen-II-Borderless.cmd.
 Windows CI uses the same script and publishes binaries without game data.
 
 Toolchain source: https://github.com/skeeto/w64devkit/releases/tag/v2.10.0
@@ -45,6 +47,18 @@ you want to preserve saves/configuration created there.
 Double-click build\win64\Play-Hexen-II.cmd. The launcher sets the working
 directory correctly. It writes debug_h2.log alongside the executable.
 For the mission pack, run Play-Hexen-II.cmd -portals from that directory.
+
+Double-click Play-Hexen-II-Borderless.cmd for desktop-sized borderless
+fullscreen. Alt+Enter switches between fullscreen and a window. The last
+window size used during the session is restored; if the session started
+fullscreen, the first window is 640x480. The video menu also has a Borderless
+setting; select Apply Changes to apply it.
+
+Use Options -> Scale to resize the HUD, menus, and console text. The chosen
+virtual UI width is saved independently of the active window size. A smaller
+window temporarily limits scaling to fit; Alt+Enter and restarting the game
+preserve the preference. Very large UI settings are limited to retain at
+least 200 logical rows, so menus continue to fit on widescreen displays.
 
 The Steam installation and its launch configuration are not modified.
 This separate copy has its own saves and settings. Do not copy the old
@@ -70,18 +84,80 @@ Implemented changes
 * -profile-startup enables logging and records subsystem entry/completion,
   elapsed time, and display enumeration details. A stalled run leaves its
   last entered stage in debug_h2.log.
+* Fullscreen defaults to a borderless window at the primary desktop's
+  resolution. It does not change the display mode or make the window topmost.
+  Losing focus releases the mouse without minimizing the borderless window.
+  -borderless explicitly selects this mode; -exclusive preserves the old
+  display-mode switching path. -window starts windowed. vid_borderless is
+  archived, so the choice survives a restart.
+* Raw Input supplies mouse motion by default, without changing Windows mouse
+  acceleration settings. Legacy messages still supply buttons and the wheel,
+  avoiding duplicate clicks. Focus loss clears pending motion, and video
+  restarts rebind input to the new window. Menu/console motion is discarded
+  instead of accumulating for gameplay. Fractional sensitivity is preserved.
+  -norawinput selects the legacy Windows mouse path; -dinput selects DirectInput.
+  in_rawinput 0 is an archived preference that takes effect on the next launch.
+  A +in_rawinput command-line override is read before input initialization.
+* On supported Windows versions, a high-resolution waitable timer waits for
+  the existing frame deadline and wakes for window/input messages. Older
+  systems retain a message-aware sleep fallback. sys_framepacing 0 restores
+  the previous millisecond sleep loop for comparison; the default is 1.
+  Timedemos bypass the frame deadline. Simulation timing and the 72 FPS cap
+  remain unchanged; this is not an uncapped renderer or a VSync implementation.
 
 Validation commands
 -------------------
+Use an isolated test directory: copy glh2.exe, codec DLLs, and the complete
+data1 directory to build\validation before running these commands.
+An alternate test executable can be selected with -Executable.
+
     .\scripts\test-windows-startup.ps1
     .\scripts\test-windows-startup.ps1 -LegacyDisplayProbe
     .\scripts\test-windows-startup.ps1 -Fullscreen -LoadMap
+    .\scripts\test-windows-startup.ps1 -Exclusive -LegacyMouse -LoadMap
+    .\scripts\test-windows-startup.ps1 -LoadMap -ToggleFullscreen
 
-Tests use copied data beside the executable, request two frames, and quit.
+Tests use copied data beside the executable, allow frames for startup and
+local client connection, then disconnect and quit without a confirmation menu.
 They require an interactive Windows desktop and proprietary game data, so
 they are not run on hosted CI. Each test overwrites debug_h2.log and can
 update the copied game's config.cfg. Save logs before the next run.
 The test only terminates its own process if its bounded timeout expires.
+
+Input regression tests require the portable compiler but no game data:
+    .\scripts\test-windows-input.ps1
+
+These exercise the actual input implementation with controlled raw packets,
+including fractional motion, focus/minimization, invalid packets, absolute
+devices, duplicate button prevention, registration, and cleanup. Windows CI
+also runs this test.
+
+Use a separate validation directory for the interactive checks below: copy
+glh2.exe, codec DLLs, and the full data1 directory into build\validation.
+These tests change that copy's configuration (including F11/F12 bindings in
+the controls test). Do not point them at a playing copy with valued settings.
+An alternate directory can be selected by passing -Executable.
+
+    .\scripts\test-windows-controls.ps1
+    .\scripts\test-windows-ui-scale.ps1
+    .\scripts\test-windows-framepacing.ps1
+
+The controls test sends Alt+Enter and activation messages only to its own
+game window. It checks desktop dimensions, window style, cursor release and
+recapture, restoration of window dimensions, and keyboard input afterward.
+It does not replace a manual Alt+Tab/gameplay test with a physical mouse.
+
+The UI scaling test checks fullscreen/windowed round trips and restarting
+after saving in windowed mode, with requested UI widths of 1280, 640, and 320.
+It verifies both the archived preference and the effective UI dimensions,
+including the minimum logical height required to keep menus visible.
+
+The frame pacing test compares sys_framepacing 0 and 1 in Blackmarsh with
+120 warm-up frames and 360 sampled frames each. -profile-frames enables the
+log format "Frame: <number> <start seconds> <processing seconds>". These are
+CPU frame timestamps, not GPU presentation or display scanout measurements.
+Do not enable per-frame logging for normal play. Each comparison saves both
+logs beside the executable as frame-pacing-0.log and frame-pacing-1.log.
 
 -legacy-display-probe opts back into the expensive display tests for driver
 troubleshooting. This switch is not recommended for normal play.
@@ -98,21 +174,41 @@ Copied installed data, 960x600 window, no installation-local GL wrapper:
   and MIDI, and exited with status 0. Map loading adds several seconds;
   these startup measurements are not map-load or gameplay benchmarks.
 
-The GCC 16.2 build succeeds with one existing unused-variable warning in
-VID_DescribeModes_f. The Windows CI workflow is added but has not been run
-on GitHub. Legacy Windows, software rendering, and HexenWorld are untested.
+The GCC 16.2 OpenGL build succeeds with one existing unused-variable warning
+in VID_DescribeModes_f. The software-rendered Windows client also compiles,
+with existing warnings; it has not been tested in gameplay. The updated CI
+workflow has not been run on GitHub. Legacy Windows and HexenWorld are untested.
 
 These are local single-run measurements, not a statistical benchmark or a
 measurement of Steam/overlay startup. The installed 2018 executable and its
 2006 OpenGL wrapper were not modified. The reported 30+10 second Steam launch
 has not been reproduced end-to-end by these isolated tests.
 
+Second milestone validation, same machine
+----------------------------------------
+* Borderless 2560x1440 and exclusive fullscreen both loaded Blackmarsh and
+  connected the player. Raw input and the legacy mouse override initialized.
+* Alt+Enter round trip, activation handlers, cursor capture, and keyboard
+  input after switching passed the controls test with a map loaded.
+* Input regression tests passed. The user's separate build\win64 data1
+  settings/saves and the original Steam installation were preserved.
+* 360 frame samples in a 960x600 window, one run per mode:
+                    Mean       Median     95th pct   Maximum    Mean FPS
+  Legacy sleeps     14.815 ms  14.748 ms  15.743 ms  16.312 ms  67.50
+  Precise waits     14.103 ms  14.049 ms  14.363 ms  14.930 ms  70.91
+  Both runs used per-frame logging. These are local measurements, not a
+  guarantee of identical results on another machine or under other loads.
+
+This pass targets the native Windows OpenGL client on the primary monitor.
+Per-monitor DPI/monitor selection, controller hotplug, modern audio, and
+decoupled rendering/simulation are still future work.
+
 Next modernization milestones
 -----------------------------
-1. Modern window/input/audio backend, borderless fullscreen, raw mouse input,
-   controller hotplug, and per-user settings. The repository has an SDL2 patch
+1. Monitor/DPI support, modern audio, controller hotplug, and per-user settings.
+   The repository has an SDL2 patch
    that can inform migration; choose SDL2/SDL3 after auditing Hexen II paths.
-2. Frame pacing and independent render/simulation rates, with demo, network,
+2. Independent render/simulation rates, with demo, network,
    moving-platform, and gameplay regression checks before raising FPS limits.
 3. Renderer improvements: explicit widescreen FOV/UI behavior, interpolation,
    GPU batching, and modern GL. Preserve Hexen II effects and asset formats.

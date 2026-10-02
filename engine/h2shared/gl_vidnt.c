@@ -152,11 +152,13 @@ modestate_t	modestate = MS_UNINIT;
 static int	vid_default = MODE_WINDOWED;
 static int	vid_modenum = NO_MODE;	// current video mode, set after mode setting succeeds
 static int	vid_deskwidth, vid_deskheight, vid_deskbpp, vid_deskmode;
-static qboolean	vid_conscale = false;
 
 static qboolean	vid_initialized = false;
 static qboolean	vid_canalttab = false;
 static qboolean	vid_wassuspended = false;
+static qboolean vid_borderless_active;
+static qboolean vid_menu_firsttime = true;
+static int vid_lastwindowedmode = RES_640X480;
 
 // cvar vid_mode must be set before calling
 // VID_SetMode, VID_ChangeVideoMode or VID_Restart_f
@@ -166,6 +168,7 @@ static cvar_t	vid_config_glx = {"vid_config_glx", "640", CVAR_ARCHIVE};
 static cvar_t	vid_config_gly = {"vid_config_gly", "480", CVAR_ARCHIVE};
 static cvar_t	vid_config_bpp = {"vid_config_bpp", "16", CVAR_ARCHIVE};
 static cvar_t	vid_config_fscr= {"vid_config_fscr", "1", CVAR_ARCHIVE};
+static cvar_t	vid_borderless = {"vid_borderless", "1", CVAR_ARCHIVE};
 // cvars for compatibility with the software version
 static cvar_t	vid_wait = {"vid_wait", "-1", CVAR_ARCHIVE};
 static cvar_t	vid_maxpages = {"vid_maxpages", "3", CVAR_ARCHIVE};
@@ -317,34 +320,24 @@ static void CenterWindow (HWND hWndCenter, int width, int height)
 
 static void VID_ConWidth (int modenum)
 {
-	int	w, h;
+	int	w, h, minwidth;
+	int	width = modelist[modenum].width;
+	int	height = modelist[modenum].height;
 
-	if (!vid_conscale)
-	{
-		Cvar_SetValueQuick (&vid_config_consize, modelist[modenum].width);
-		return;
-	}
-
+	/* Keep the requested UI width separate from what this mode can display.
+	 * A small window must not overwrite the fullscreen preference, even if
+	 * it can only display an unscaled UI. Keep at least 200 logical rows. */
+	minwidth = (200 * width + height - 1) / height;
+	minwidth = (q_max(MIN_WIDTH, minwidth) + 7) & ~7;
 	w = vid_config_consize.integer;
 	w &= ~7; /* make it a multiple of eight */
-	if (w < MIN_WIDTH)
-		w = MIN_WIDTH;
-	else if (w > modelist[modenum].width)
-		w = modelist[modenum].width;
-
-	h = w * modelist[modenum].height / modelist[modenum].width;
-	if (h < 200 /* MIN_HEIGHT */ ||
-	    h > modelist[modenum].height || w > modelist[modenum].width)
-	{
-		vid_conscale = false;
-		Cvar_SetValueQuick (&vid_config_consize, modelist[modenum].width);
-		return;
-	}
+	if (w < minwidth)
+		w = minwidth;
+	if (w > width)
+		w = width;
+	h = w * height / width;
 	vid.width = vid.conwidth = w;
 	vid.height = vid.conheight = h;
-	if (w != modelist[modenum].width)
-		vid_conscale = true;
-	else	vid_conscale = false;
 }
 
 void VID_ChangeConsize (int dir)
@@ -378,9 +371,6 @@ void VID_ChangeConsize (int dir)
 	vid.height = vid.conheight = h;
 	Cvar_SetValueQuick (&vid_config_consize, vid.conwidth);
 	vid.recalc_refdef = 1;
-	if (vid.conwidth != modelist[vid_modenum].width)
-		vid_conscale = true;
-	else	vid_conscale = false;
 }
 
 float VID_ReportConsize(void)
@@ -412,8 +402,10 @@ static qboolean VID_SetWindowedMode (int modenum)
 
 	// Pa3PyX: set the original fullscreen mode if
 	// we are switching to window from fullscreen.
-	if (modestate == MS_FULLDIB)
+	if (modestate == MS_FULLDIB && !vid_borderless_active)
 		ChangeDisplaySettings(NULL, 0);
+	vid_borderless_active = false;
+	vid_lastwindowedmode = modenum;
 
 	WindowRect.top = WindowRect.left = 0;
 
@@ -481,7 +473,11 @@ static qboolean VID_SetFullDIBMode (int modenum)
 	gdevmode.dmPelsHeight = modelist[modenum].height;
 	gdevmode.dmSize = sizeof (gdevmode);
 
-	if (ChangeDisplaySettings (&gdevmode, CDS_FULLSCREEN) != DISP_CHANGE_SUCCESSFUL)
+	if (modestate == MS_FULLDIB && !vid_borderless_active && vid_borderless.integer)
+		ChangeDisplaySettings(NULL, 0);
+	vid_borderless_active = WinNT && vid_borderless.integer;
+	if (!vid_borderless_active &&
+	    ChangeDisplaySettings (&gdevmode, CDS_FULLSCREEN) != DISP_CHANGE_SUCCESSFUL)
 		Sys_Error ("Couldn't set fullscreen DIB mode");
 
 	WindowRect.top = WindowRect.left = 0;
@@ -493,7 +489,7 @@ static qboolean VID_SetFullDIBMode (int modenum)
 	DIBHeight = modelist[modenum].height;
 
 	WindowStyle = WS_POPUP | WS_SYSMENU | WS_VISIBLE;
-	ExWindowStyle = WS_EX_TOPMOST;
+	ExWindowStyle = vid_borderless_active ? 0 : WS_EX_TOPMOST;
 
 	rect = WindowRect;
 	AdjustWindowRectEx(&rect, WindowStyle, FALSE, 0);
@@ -508,6 +504,7 @@ static qboolean VID_SetFullDIBMode (int modenum)
 
 	modestate = MS_FULLDIB;
 	Cvar_SetQuick (&vid_config_fscr, "1");
+	Con_SafePrintf("Display mode: %s fullscreen\n", vid_borderless_active ? "borderless" : "exclusive");
 
 // needed because we're not getting WM_MOVE messages fullscreen on NT
 	window_x = 0;
@@ -525,6 +522,13 @@ static qboolean VID_SetMode (int modenum, const unsigned char *palette)
 
 	if (modenum < 0 || modenum >= *nummodes)
 		Sys_Error ("Bad video mode\n");
+	if (modelist == fmodelist && WinNT && vid_borderless.integer)
+	{
+		if (vid_deskmode < 0)
+			Sys_Error("Desktop mode unavailable for borderless fullscreen");
+		modenum = vid_deskmode;
+		Cvar_SetValueQuick(&vid_mode, modenum);
+	}
 
 	CDAudio_Pause ();
 
@@ -579,6 +583,10 @@ static qboolean VID_SetMode (int modenum, const unsigned char *palette)
 
 	// setup the effective console width
 	VID_ConWidth(modenum);
+	if (COM_CheckParm("-profile-startup"))
+		Sys_Printf("UI layout: %dx%d in %dx%d, requested width %d\n",
+			vid.conwidth, vid.conheight, modelist[modenum].width,
+			modelist[modenum].height, vid_config_consize.integer);
 
 	window_width = DIBWidth;
 	window_height = DIBHeight;
@@ -1529,7 +1537,7 @@ static void AppActivate (BOOL fActive, BOOL minimize)
 	{
 		if (modestate == MS_FULLDIB)
 		{
-			if (vid_canalttab && vid_wassuspended)
+			if (!vid_borderless_active && vid_canalttab && vid_wassuspended)
 			{
 				vid_wassuspended = false;
 				ChangeDisplaySettings (&gdevmode, CDS_FULLSCREEN);
@@ -1566,7 +1574,7 @@ static void AppActivate (BOOL fActive, BOOL minimize)
 		{
 			IN_DeactivateMouse ();
 			IN_ShowMouse ();
-			if (vid_canalttab)
+			if (vid_canalttab && !vid_borderless_active)
 			{
 				ChangeDisplaySettings (NULL, 0);
 				vid_wassuspended = true;
@@ -1616,11 +1624,16 @@ static LRESULT WINAPI MainWndProc (HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM l
 
 	switch (uMsg)
 	{
+#ifdef WM_INPUT
+	case WM_INPUT:
+		IN_RawInput(lParam);
+		return DefWindowProc(hWnd, uMsg, wParam, lParam);
+#endif
 	case WM_ERASEBKGND:
 		return 1;
 
 	case WM_KILLFOCUS:
-		if (modestate == MS_FULLDIB)
+		if (modestate == MS_FULLDIB && !vid_borderless_active)
 			ShowWindow(mainwindow, SW_SHOWMINNOACTIVE);
 		break;
 
@@ -1661,6 +1674,12 @@ static LRESULT WINAPI MainWndProc (HWND hWnd, UINT uMsg, WPARAM wParam, LPARAM l
 
 	case WM_KEYDOWN:
 	case WM_SYSKEYDOWN:
+		if (wParam == VK_RETURN && (lParam & (1L << 29)))
+		{
+			if (!(lParam & (1L << 30)))
+				Cbuf_AddText("vid_togglefullscreen\n");
+			break;
+		}
 		Key_Event (MapKey(lParam), true);
 		break;
 
@@ -2250,6 +2269,7 @@ static void VID_Restart_f (void)
 
 	Con_Printf ("Re-initializing video:\n");
 	VID_ChangeVideoMode (vid_mode.integer);
+	vid_menu_firsttime = true;
 }
 
 static int sort_modes (const void *arg1, const void *arg2)
@@ -2297,7 +2317,7 @@ static void VID_SortModes (void)
 	vid_deskmode = -1;
 
 	// find the desktop mode number. shouldn't fail!
-	for (i = 1; i < num_fmodes; i++)
+	for (i = 0; i < num_fmodes; i++)
 	{
 		if ((fmodelist[i].width == vid_deskwidth) &&
 			(fmodelist[i].height == vid_deskheight) &&
@@ -2326,6 +2346,7 @@ void	VID_Init (const unsigned char *palette)
 	HDC	hdc;
 	const char	*read_vars[] = {
 				"vid_config_fscr",
+				"vid_borderless",
 				"vid_config_gl8bit",
 				"vid_config_bpp",
 				"vid_config_glx",
@@ -2338,6 +2359,7 @@ void	VID_Init (const unsigned char *palette)
 
 	Cvar_RegisterVariable (&vid_config_gl8bit);
 	Cvar_RegisterVariable (&vid_config_fscr);
+	Cvar_RegisterVariable (&vid_borderless);
 	Cvar_RegisterVariable (&vid_config_bpp);
 	Cvar_RegisterVariable (&vid_config_gly);
 	Cvar_RegisterVariable (&vid_config_glx);
@@ -2362,6 +2384,7 @@ void	VID_Init (const unsigned char *palette)
 	Cmd_AddCommand ("vid_describemode", VID_DescribeMode_f);
 	Cmd_AddCommand ("vid_describemodes", VID_DescribeModes_f);
 	Cmd_AddCommand ("vid_restart", VID_Restart_f);
+	Cmd_AddCommand ("vid_togglefullscreen", VID_ToggleFullscreen);
 
 	VID_InitPalette (palette);
 
@@ -2408,6 +2431,12 @@ void	VID_Init (const unsigned char *palette)
 
 	// perform an early read of config.cfg
 	CFG_ReadCvars (read_vars, num_readvars);
+	if (COM_CheckParm("-exclusive"))
+		Cvar_SetQuick(&vid_borderless, "0");
+	else if (COM_CheckParm("-borderless"))
+		Cvar_SetQuick(&vid_borderless, "1");
+	if (!WinNT)
+		Cvar_SetQuick(&vid_borderless, "0");
 
 	width = vid_config_glx.integer;
 	height = vid_config_gly.integer;
@@ -2416,13 +2445,11 @@ void	VID_Init (const unsigned char *palette)
 	{
 		Cvar_SetQuick (&vid_config_fscr, "0");
 	}
-	else if (COM_CheckParm("-fullscreen") || COM_CheckParm("-f"))
+	else if (COM_CheckParm("-fullscreen") || COM_CheckParm("-f") ||
+		 COM_CheckParm("-borderless") || COM_CheckParm("-exclusive"))
 	{
 		Cvar_SetQuick (&vid_config_fscr, "1");
 	}
-
-	if (vid_config_consize.integer != width)
-		vid_conscale = true;
 
 	if (!vid_config_fscr.integer)
 	{
@@ -2511,7 +2538,7 @@ void	VID_Init (const unsigned char *palette)
 			findbpp = 0;
 		}
 
-		if (COM_CheckParm("-current"))
+		if (vid_borderless.integer || COM_CheckParm("-current"))
 		{	// user wants fullscreen and
 			// with desktop dimensions
 			if (vid_deskmode >= 0)
@@ -2636,20 +2663,15 @@ void	VID_Init (const unsigned char *palette)
 		}
 	}	// end of fullscreen parsing
 
-	if (!vid_conscale)
-		Cvar_SetValueQuick (&vid_config_consize, width);
-
 	// This will display a bigger hud and readable fonts at high
 	// resolutions. The fonts will be somewhat distorted, though
 	i = COM_CheckParm("-conwidth");
 	if (i != 0 && i < com_argc-1)
+	{
 		i = atoi(com_argv[i + 1]);
-	else	i = vid_config_consize.integer;
-	if (i < MIN_WIDTH)	i = MIN_WIDTH;
-	else if (i > width)	i = width;
-	Cvar_SetValueQuick(&vid_config_consize, i);
-	if (vid_config_consize.integer != width)
-		vid_conscale = true;
+		if (i < MIN_WIDTH)	i = MIN_WIDTH;
+		Cvar_SetValueQuick(&vid_config_consize, i);
+	}
 
 	vid_initialized = true;
 
@@ -2724,7 +2746,7 @@ void	VID_Shutdown (void)
 		if (hDC && mainwindow)
 			ReleaseDC(mainwindow, hDC);
 
-		if (modestate == MS_FULLDIB)
+		if (modestate == MS_FULLDIB && !vid_borderless_active)
 			ChangeDisplaySettings (NULL, 0);
 
 		if (maindc && mainwindow)
@@ -2750,6 +2772,26 @@ void	VID_Shutdown (void)
 
 void VID_ToggleFullscreen (void)
 {
+	if (!vid_initialized || draw_reinit)
+		return;
+	if (modestate == MS_WINDOWED)
+	{
+		if (vid_deskmode < 0)
+		{
+			Con_Printf("Desktop fullscreen mode unavailable\n");
+			return;
+		}
+		modelist = fmodelist;
+		nummodes = &num_fmodes;
+		Cvar_SetValueQuick(&vid_mode, vid_deskmode);
+	}
+	else
+	{
+		modelist = wmodelist;
+		nummodes = &num_wmodes;
+		Cvar_SetValueQuick(&vid_mode, q_min(vid_lastwindowedmode, num_wmodes - 1));
+	}
+	VID_Restart_f();
 }
 
 
@@ -2791,11 +2833,12 @@ static int	vid_cursor;
 static vmode_t	*vid_menulist;	// this changes when vid_menu_fs changes
 static int	vid_menubpp;	// if this changes, vid_menunum already changes
 static qboolean	vid_menu_fs;
+static qboolean vid_menu_borderless;
 static qboolean	want_fstoggle, need_apply;
-static qboolean	vid_menu_firsttime = true;
 
 enum {
 	VID_FULLSCREEN,
+	VID_BORDERLESS,
 	VID_RESOLUTION,
 	VID_BPP,
 	VID_MULTITEXTURE,
@@ -2840,6 +2883,7 @@ static void VID_MenuDraw (void)
 		vid_menunum = vid_modenum;
 		vid_menubpp = modelist[vid_modenum].bpp;
 		vid_menu_fs = (modestate != MS_WINDOWED);
+		vid_menu_borderless = vid_borderless.integer;
 		vid_menulist = (modestate == MS_WINDOWED) ? wmodelist : fmodelist;
 		vid_cursor = (num_fmodes) ? 0 : VID_RESOLUTION;
 		vid_menu_firsttime = false;
@@ -2848,20 +2892,26 @@ static void VID_MenuDraw (void)
 	want_fstoggle = ( ((modestate == MS_WINDOWED) && vid_menu_fs) || ((modestate != MS_WINDOWED) && !vid_menu_fs) );
 
 	need_apply = (vid_menunum != vid_modenum) || want_fstoggle ||
+			(vid_menu_borderless != !!vid_borderless.integer) ||
 			(have_mtex && (gl_mtexable != !!gl_multitexture.integer)) ||
 			(have_NPOT && (gl_tex_NPOT != !!gl_texture_NPOT.integer)) ||
 			(have8bit && (is8bit != !!vid_config_gl8bit.integer));
 
 	M_Print (76, 92 + 8*VID_FULLSCREEN, "Fullscreen: ");
 	M_DrawYesNo (76+12*8, 92 + 8*VID_FULLSCREEN, vid_menu_fs, !want_fstoggle);
+	M_Print (76, 92 + 8*VID_BORDERLESS, "Borderless: ");
+	M_DrawYesNo (76+12*8, 92 + 8*VID_BORDERLESS, vid_menu_borderless,
+		vid_menu_borderless == !!vid_borderless.integer);
 
 	M_Print (76, 92 + 8*VID_RESOLUTION, "Resolution: ");
-	if (vid_menunum == vid_modenum)
+	if (vid_menu_fs && vid_menu_borderless)
+		M_PrintWhite(76+12*8, 92 + 8*VID_RESOLUTION, "Desktop");
+	else if (vid_menunum == vid_modenum)
 		M_PrintWhite (76+12*8, 92 + 8*VID_RESOLUTION, vid_menulist[vid_menunum].modedesc);
 	else
 		M_Print (76+12*8, 92 + 8*VID_RESOLUTION, vid_menulist[vid_menunum].modedesc);
 
-	if (vid_menu_fs && num_fmodes && !Win95old)
+	if (vid_menu_fs && !vid_menu_borderless && num_fmodes && !Win95old)
 	{
 		M_Print (76, 92 + 8*VID_BPP, "Color BPP : ");
 		if (vid_menubpp == modelist[vid_modenum].bpp)
@@ -3001,7 +3051,7 @@ static void VID_MenuKey (int key)
 		{
 			vid_cursor = VID_RESOLUTION;
 		}
-		if ( vid_cursor == VID_BPP && (!vid_menu_fs || !num_fmodes || Win95old ))
+		if ( vid_cursor == VID_BPP && (!vid_menu_fs || vid_menu_borderless || !num_fmodes || Win95old ))
 		{
 			vid_cursor--;
 		}
@@ -3015,7 +3065,7 @@ static void VID_MenuKey (int key)
 			vid_cursor = (num_fmodes) ? 0 : VID_RESOLUTION;
 			break;
 		}
-		if ( vid_cursor == VID_BPP && (!vid_menu_fs || !num_fmodes || Win95old ))
+		if ( vid_cursor == VID_BPP && (!vid_menu_fs || vid_menu_borderless || !num_fmodes || Win95old ))
 			vid_cursor++;
 		if (vid_cursor >= VID_BLANKLINE)
 		{
@@ -3038,6 +3088,7 @@ static void VID_MenuKey (int key)
 			vid_menunum = vid_modenum;
 			vid_menubpp = modelist[vid_modenum].bpp;
 			vid_menu_fs = (modestate != MS_WINDOWED);
+			vid_menu_borderless = vid_borderless.integer;
 			vid_menulist = (modestate == MS_WINDOWED) ? wmodelist : fmodelist;
 			Cvar_SetValueQuick (&vid_config_gl8bit, is8bit);
 			vid_cursor = (num_fmodes) ? 0 : VID_RESOLUTION;
@@ -3046,6 +3097,7 @@ static void VID_MenuKey (int key)
 			if (need_apply)
 			{
 				Cvar_SetValueQuick(&vid_mode, vid_menunum);
+				Cvar_SetValueQuick(&vid_borderless, vid_menu_borderless);
 				modelist = (vid_menu_fs) ? fmodelist : wmodelist;
 				nummodes = (vid_menu_fs) ? &num_fmodes : &num_wmodes;
 				VID_Restart_f();
@@ -3058,6 +3110,10 @@ static void VID_MenuKey (int key)
 	case K_LEFTARROW:
 		switch (vid_cursor)
 		{
+		case VID_BORDERLESS:
+			if (WinNT)
+				vid_menu_borderless = !vid_menu_borderless;
+			break;
 		case VID_FULLSCREEN:
 			if (!num_fmodes)
 				break;
@@ -3067,6 +3123,8 @@ static void VID_MenuKey (int key)
 			vid_menubpp = vid_menulist[vid_menunum].bpp;
 			break;
 		case VID_RESOLUTION:
+			if (vid_menu_fs && vid_menu_borderless)
+				break;
 			S_LocalSound ("raven/menu1.wav");
 			vid_menunum--;
 			if (vid_menunum < 0 || vid_menubpp != vid_menulist[vid_menunum].bpp)
@@ -3098,6 +3156,10 @@ static void VID_MenuKey (int key)
 	case K_RIGHTARROW:
 		switch (vid_cursor)
 		{
+		case VID_BORDERLESS:
+			if (WinNT)
+				vid_menu_borderless = !vid_menu_borderless;
+			break;
 		case VID_FULLSCREEN:
 			if (!num_fmodes)
 				break;
@@ -3107,6 +3169,8 @@ static void VID_MenuKey (int key)
 			vid_menubpp = vid_menulist[vid_menunum].bpp;
 			break;
 		case VID_RESOLUTION:
+			if (vid_menu_fs && vid_menu_borderless)
+				break;
 			S_LocalSound ("raven/menu1.wav");
 			tmpnum = (vid_menu_fs) ? &num_fmodes : &num_wmodes;
 			vid_menunum++;

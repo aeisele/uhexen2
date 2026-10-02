@@ -32,6 +32,7 @@
 
 #include "quakedef.h"
 #include "winquake.h"
+#include "cfgfile.h"
 #include <mmsystem.h>
 
 #define DIRECTINPUT_VERSION 0x0300
@@ -39,10 +40,20 @@
 
 // mouse variables
 static cvar_t	m_filter = {"m_filter", "0", CVAR_NONE};
+static cvar_t	in_rawinput = {"in_rawinput", "1", CVAR_ARCHIVE};
+static qboolean rawinput_active;
+#ifdef WM_INPUT
+static BOOL (WINAPI *pRegisterRawInputDevices)(PCRAWINPUTDEVICE, UINT, UINT);
+static UINT (WINAPI *pGetRawInputData)(HRAWINPUT, UINT, LPVOID, PUINT, UINT);
+static qboolean raw_absolute_valid;
+static HANDLE raw_absolute_device;
+static LONG raw_absolute_x, raw_absolute_y;
+#endif
 
 static int		mouse_oldbuttonstate;
 static POINT		current_pos;
-static int		mouse_x, mouse_y, old_mouse_x, old_mouse_y, mx_accum, my_accum;
+static float mouse_x, mouse_y;
+static int old_mouse_x, old_mouse_y, mx_accum, my_accum;
 
 static qboolean	restore_spi;
 static int		originalmouseparms[3], newmouseparms[3] = {0, 0, 0};
@@ -182,6 +193,96 @@ static void IN_StartupJoystick (void);
 static void Joy_AdvancedUpdate_f (void);
 static void IN_JoyMove (usercmd_t *cmd);
 
+/* Keep legacy button/wheel messages so they are delivered exactly once.
+ * Only motion comes from WM_INPUT; never request background input. */
+static qboolean IN_InitRawInput (void)
+{
+#ifdef WM_INPUT
+	RAWINPUTDEVICE device;
+	HMODULE user32 = GetModuleHandleA("user32.dll");
+	if (!user32)
+		return false;
+	pRegisterRawInputDevices = (BOOL (WINAPI *)(PCRAWINPUTDEVICE, UINT, UINT))
+		GetProcAddress(user32, "RegisterRawInputDevices");
+	pGetRawInputData = (UINT (WINAPI *)(HRAWINPUT, UINT, LPVOID, PUINT, UINT))
+		GetProcAddress(user32, "GetRawInputData");
+	if (!pRegisterRawInputDevices || !pGetRawInputData)
+		return false;
+	device.usUsagePage = 1;
+	device.usUsage = 2; /* mouse */
+	device.dwFlags = 0;
+	device.hwndTarget = mainwindow;
+	raw_absolute_valid = false;
+	return pRegisterRawInputDevices(&device, 1, sizeof(device)) != 0;
+#else
+	return false;
+#endif
+}
+
+static void IN_ShutdownRawInput (void)
+{
+#ifdef WM_INPUT
+	if (rawinput_active)
+	{
+		RAWINPUTDEVICE device;
+		device.usUsagePage = 1;
+		device.usUsage = 2;
+		device.dwFlags = RIDEV_REMOVE;
+		device.hwndTarget = NULL;
+		pRegisterRawInputDevices(&device, 1, sizeof(device));
+	}
+	raw_absolute_valid = false;
+#endif
+	rawinput_active = false;
+}
+
+void IN_RawInput (LPARAM rawinput)
+{
+#ifdef WM_INPUT
+	RAWINPUT input;
+	UINT size = sizeof(input), received;
+	LONG x, y;
+	int width, height;
+	if (!rawinput_active || !mouseactive || !ActiveApp || Minimized)
+		return;
+	/* Menus and the console must not queue a turn for the next game frame. */
+	if (Key_GetDest() != key_game)
+	{
+		old_mouse_x = old_mouse_y = mx_accum = my_accum = 0;
+		raw_absolute_valid = false;
+		return;
+	}
+	received = pGetRawInputData((HRAWINPUT)rawinput, RID_INPUT,
+		&input, &size, sizeof(RAWINPUTHEADER));
+	if (received == (UINT)-1 || received < sizeof(RAWINPUTHEADER) + sizeof(RAWMOUSE) ||
+	    input.header.dwType != RIM_TYPEMOUSE)
+		return;
+	if (input.data.mouse.usFlags & MOUSE_MOVE_ABSOLUTE)
+	{
+		/* Absolute devices (including Remote Desktop) report 0..65535. */
+		width = GetSystemMetrics((input.data.mouse.usFlags & MOUSE_VIRTUAL_DESKTOP) ? SM_CXVIRTUALSCREEN : SM_CXSCREEN);
+		height = GetSystemMetrics((input.data.mouse.usFlags & MOUSE_VIRTUAL_DESKTOP) ? SM_CYVIRTUALSCREEN : SM_CYSCREEN);
+		x = (LONG)((double)input.data.mouse.lLastX * width / 65535.0);
+		y = (LONG)((double)input.data.mouse.lLastY * height / 65535.0);
+		if (raw_absolute_valid && raw_absolute_device == input.header.hDevice)
+		{
+			mx_accum += x - raw_absolute_x;
+			my_accum += y - raw_absolute_y;
+		}
+		raw_absolute_x = x;
+		raw_absolute_y = y;
+		raw_absolute_device = input.header.hDevice;
+		raw_absolute_valid = true;
+	}
+	else
+	{
+		mx_accum += input.data.mouse.lLastX;
+		my_accum += input.data.mouse.lLastY;
+		raw_absolute_valid = false;
+	}
+#endif
+}
+
 
 /*
 ===========
@@ -272,7 +373,7 @@ void IN_ActivateMouse (void)
 		}
 		else
 		{
-			if (mouseparmsvalid)
+			if (!rawinput_active && mouseparmsvalid)
 				restore_spi = SystemParametersInfo (SPI_SETMOUSE, 0, newmouseparms, 0);
 
 			SetCursorPos (window_center_x, window_center_y);
@@ -331,6 +432,7 @@ void IN_DeactivateMouse (void)
 		}
 
 		mouseactive = false;
+		IN_ClearStates ();
 	}
 }
 
@@ -476,6 +578,12 @@ static void IN_StartupMouse (void)
 		return;
 
 	mouseinitialized = true;
+	if (!COM_CheckParm("-dinput") && !COM_CheckParm("-norawinput") && in_rawinput.integer)
+	{
+		rawinput_active = IN_InitRawInput();
+		Con_SafePrintf(rawinput_active ? "Raw mouse input initialized\n" :
+			"Raw mouse input unavailable; using legacy mouse input\n");
+	}
 
 	if (COM_CheckParm ("-dinput"))
 	{
@@ -484,7 +592,7 @@ static void IN_StartupMouse (void)
 			Con_SafePrintf ("DirectInput initialization failed\n");
 	}
 
-	if (!dinput_init)
+	if (!dinput_init && !rawinput_active)
 	{
 		IN_InitWinMouse ();
 	}
@@ -505,6 +613,12 @@ void IN_Init (void)
 {
 	// mouse variables
 	Cvar_RegisterVariable (&m_filter);
+	Cvar_RegisterVariable (&in_rawinput);
+	{
+		const char *vars[] = {"in_rawinput"};
+		CFG_ReadCvars(vars, Q_COUNTOF(vars));
+		CFG_ReadCvarOverrides(vars, Q_COUNTOF(vars));
+	}
 
 	// joystick variables
 	Cvar_RegisterVariable (&in_joystick);
@@ -547,6 +661,7 @@ void IN_Shutdown (void)
 	IN_DeactivateMouse ();
 	IN_ShowMouse ();
 
+	IN_ShutdownRawInput ();
 	dinput_init = mouseinitialized = false;
 	if (g_pMouse)
 	{
@@ -581,6 +696,17 @@ void IN_ReInit (void)
 		g_pdi = NULL;
 	}
 	old_mouse_x = old_mouse_y = mx_accum = my_accum = 0;
+	if (rawinput_active)
+	{
+		IN_ShutdownRawInput();
+		rawinput_active = IN_InitRawInput();
+		if (!rawinput_active)
+		{
+			Con_SafePrintf("Raw mouse input reinitialization failed; using legacy mouse input\n");
+			IN_InitWinMouse();
+		}
+		return;
+	}
 	// we only need to re-initialize direct input.
 	// if winmouse is active, nothing is necessary.
 	if (!dinput_init)
@@ -630,7 +756,13 @@ static void IN_MouseMove (usercmd_t *cmd)
 	if (!mouseactive)
 		return;
 
-	if (dinput_init)
+	if (rawinput_active)
+	{
+		mx = mx_accum;
+		my = my_accum;
+		mx_accum = my_accum = 0;
+	}
+	else if (dinput_init)
 	{
 		DIDEVICEOBJECTDATA	od;
 		DWORD			dwElements;
@@ -785,7 +917,7 @@ static void IN_MouseMove (usercmd_t *cmd)
 		}
 	}
 
-	if (dinput_init)
+	if (dinput_init || rawinput_active)
 		return;
 
 // if the mouse has moved, force it to the center, so there's room to move
@@ -838,7 +970,7 @@ IN_Accumulate
 */
 void IN_Accumulate (void)
 {
-	if (dinput_init)
+	if (dinput_init || rawinput_active)
 		return;
 	if (mouseactive)
 	{
@@ -860,12 +992,11 @@ IN_ClearStates
 */
 void IN_ClearStates (void)
 {
-	if (mouseactive)
-	{
-		mx_accum = 0;
-		my_accum = 0;
-		mouse_oldbuttonstate = 0;
-	}
+	old_mouse_x = old_mouse_y = mx_accum = my_accum = 0;
+	mouse_oldbuttonstate = mstate_di = 0;
+#ifdef WM_INPUT
+	raw_absolute_valid = false;
+#endif
 }
 
 

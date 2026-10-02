@@ -44,6 +44,7 @@ extern	int		global_nCmdShow;
 
 
 extern qboolean		dinput_init;
+void IN_RawInput (LPARAM rawinput);
 
 extern HWND		mainwindow;
 extern qboolean		ActiveApp, Minimized;
