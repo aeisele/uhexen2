@@ -1,20 +1,47 @@
 name: Windows
 
-on: [push, pull_request]
+on:
+  push:
+    branches: ['**']
+  pull_request:
+  workflow_call:
+    inputs:
+      version:
+        description: Version to put in the Windows package filename
+        type: string
+        default: ''
+
+permissions:
+  contents: read
 
 jobs:
   build-windows:
-    runs-on: windows-latest
+    runs-on: windows-2025
+    timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - name: Build native 64-bit OpenGL client
         shell: pwsh
         run: ./scripts/build-windows.ps1 -Bootstrap
       - name: Check Windows mouse input
         shell: pwsh
         run: ./scripts/test-windows-input.ps1
-      - uses: actions/upload-artifact@v4
+      - name: Check Windows release packaging
+        shell: pwsh
+        run: ./scripts/test-windows-package.ps1
+      - name: Package Windows release files
+        shell: pwsh
+        env:
+          PACKAGE_VERSION: ${{ inputs.version }}
+        run: ./scripts/package-windows.ps1 -Version $env:PACKAGE_VERSION
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: hexen2-windows-x64
-          path: build/win64/
+          path: |
+            build/packages/*.zip
+            build/packages/*.sha256
           if-no-files-found: error
+          compression-level: 0
+          retention-days: 14

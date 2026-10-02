@@ -1,0 +1,36 @@
+Hexen II: Hammer of Thyrion - Windows x64
+=======================================
+
+This is the Windows modernization build from aeisele/uhexen2.
+Requires 64-bit Windows, OpenGL, and your own installed copy of Hexen II.
+The game data is not included.
+
+Install and play
+----------------
+1. Extract this ZIP into a new folder where you can write files.
+2. Copy the complete data1 folder from your Hexen II installation into it.
+   Include loose files as well as the PAK files. For Steam, this is usually
+   SteamApps\common\Hexen 2\data1. Do not copy old EXEs or DLLs.
+3. Double-click Play-Hexen-II-Borderless.cmd.
+
+Alt+Enter switches between borderless fullscreen and a window.
+Options -> Scale adjusts the HUD, menus, and console text.
+Alt+Tab releases the mouse; returning to the game captures it again.
+
+For Portal of Praevus, also copy your installed portals folder and run:
+    Play-Hexen-II-Borderless.cmd -portals
+
+Keep your data1 and portals folders when updating: they contain your saves
+and settings. The release archive contains neither game data nor config.cfg.
+Back up those folders before replacing an existing installation.
+
+Source and troubleshooting
+--------------------------
+BUILD-INFO.txt identifies the exact source commit and its downloadable source
+archive. The source includes the build scripts. The engine license is in
+COPYING.txt; third-party notices are in licenses; credits are in AUTHORS.txt.
+See docs/windows-modernization.txt for build instructions and available flags.
+Launchers write debug_h2.log beside glh2.exe for troubleshooting.
+
+Project: https://github.com/aeisele/uhexen2
+Upstream: https://github.com/sezero/uhexen2

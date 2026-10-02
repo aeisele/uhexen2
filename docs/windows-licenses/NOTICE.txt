@@ -1,0 +1,39 @@
+Third-party components in the Windows package
+============================================
+
+The codec DLLs are distributed as provided in oslibs/windows/codecs/x64.
+The source repository also includes libTiMidity, linked into the engine.
+
+libmad: Copyright (C) 2000-2004 Underbit Technologies, Inc.
+GNU GPL version 2 or later; see ../COPYING.txt.
+Source: https://www.underbit.com/products/mad/
+
+libmikmod: (c) 1998-2014 Miodrag Vallat and others.
+GNU Library GPL version 2 or later. LGPL 2.1 text is included in
+libtimidity-LGPL.txt.
+Source: https://github.com/sezero/mikmod
+
+libmpg123: Copyright 1995-2010 by the mpg123 project.
+GNU LGPL version 2.1; text is included in libtimidity-LGPL.txt.
+Source: https://www.mpg123.de/download.shtml
+
+libTiMidity: GNU LGPL or Perl Artistic License, at your option.
+See libtimidity-LGPL.txt and libtimidity-Artistic.txt. Its source and
+additional authorship notices are included in libs/timidity in the engine
+source archive linked by BUILD-INFO.txt.
+
+libFLAC, libogg, libvorbis, libopus, libopusfile: Xiph.Org projects and
+contributors. See the individual BSD license texts in this directory.
+Source: https://github.com/xiph
+
+libxmp: See libxmp-MIT.txt and libxmp-prowizard.txt.
+Source: https://github.com/libxmp/libxmp
+
+License text provenance (unmodified upstream files):
+https://github.com/xiph/flac/blob/1.3.0/COPYING.Xiph
+https://github.com/xiph/ogg/blob/v1.3.1/COPYING
+https://github.com/xiph/vorbis/blob/v1.3.3/COPYING
+https://github.com/xiph/opus/blob/v1.1.3/COPYING
+https://github.com/xiph/opusfile/blob/v0.9/COPYING
+https://github.com/libxmp/libxmp/blob/libxmp-4.6.3/docs/COPYING
+https://github.com/libxmp/libxmp/blob/libxmp-4.6.3/src/loaders/prowizard/LICENSE.txt

@@ -33,7 +33,52 @@ The script rebuilds every object because the legacy Makefile does not track
 compiler option/header changes and shares objects with the software renderer.
 Output: build\win64\glh2.exe, codec DLLs, Play-Hexen-II.cmd, and
 Play-Hexen-II-Borderless.cmd.
-Windows CI uses the same script and publishes binaries without game data.
+Windows CI uses the same script and uploads a ZIP plus SHA-256 checksum.
+It excludes game data, configuration, saves, and logs.
+
+GitHub Actions and releases
+--------------------------
+The Windows workflow builds optimized binaries and runs input and packaging
+regression checks on every branch push and pull request. Download its
+hexen2-windows-x64 artifact for a development build; artifacts expire after
+14 days. The release workflow reuses exactly the same build and checks.
+
+To create a versioned release on https://github.com/aeisele/uhexen2:
+1. Merge the desired changes into the default branch (currently master).
+2. Open Actions -> Release Windows -> Run workflow, selecting master.
+3. Enter a new version tag, for example v1.5.10-win.1. Do not create the tag
+   separately. The workflow pins it to the exact commit selected by the run.
+4. Draft and Prerelease default to enabled. Keep Draft enabled to review the
+   uploaded files on the Releases page before publishing. Disable Draft to
+   publish automatically once the build and checks pass. Disable Prerelease
+   when deliberately making a stable release.
+
+Other branches are rejected before building a release. Normal pushes and
+tag pushes never publish a release. Existing tags/releases are not replaced;
+choose a new version if one already exists. If an upload fails and leaves
+a draft, inspect and remove that incomplete draft before rerunning with its
+version, or use a new version. Release runs are serialized, and only the
+upload job receives contents:write. No personal access token is needed;
+the workflow uses GitHub's built-in token. Actions are pinned to commit IDs.
+
+The release ZIP contains the x64 executable, runtime DLLs, both launchers,
+installation instructions, license notices, and BUILD-INFO.txt linking the
+exact source commit/archive. GitHub also provides its source downloads.
+The adjacent .sha256 file covers the ZIP. Check it locally with Get-FileHash
+or sha256sum. Packaging uses an explicit file list, even when build\win64
+already contains a playing copy of the game.
+
+To package an existing local build without publishing:
+    .\scripts\package-windows.ps1 -Version v1.5.10-local.1
+Output goes to build\packages. An existing package of that name is rejected.
+The version labels this fork's Windows package; it does not change the
+upstream engine version or game/network compatibility.
+
+To test packaging without proprietary game data:
+    .\scripts\test-windows-package.ps1
+
+GitHub runner tests do not exercise gameplay or physical mouse interaction;
+those still require the local interactive checks described below.
 
 Toolchain source: https://github.com/skeeto/w64devkit/releases/tag/v2.10.0
 
